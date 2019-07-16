@@ -1,0 +1,162 @@
+#!/usr/bin/env python
+import pysam
+from argparse import RawTextHelpFormatter
+import argparse,math,os,sys
+__version__='0.0.1'
+__usage__='''
+
+  O                                         o                                              
+  O                                         o
+ooOooo                          .     .     o
+  O                                         o
+  o      .oOoO     o     O      O     O     o 
+  O      O   o     O  o  o      o     o     O 
+  o      o   O     o  O  O      O     O     o 
+  `oO    `OoO'o    `Oo'oO'      o     o     O'
+
+            calculate read length
+----------------------------------------------
+Version:    {}
+Author:     Danny Antaki <dantaki at ucsd dot edu>
+
+About:      Calculate read length from a BAM file
+Usage:      tawiil [-h] <-i BAM> [options]
+
+Required arguments:
+    -i    FILE        bam file
+
+Options:
+    -n    INT         number of reads to process per scaffold [1000000]
+    -r    STR         scaffolds, comma separated [1..22,X,Y]
+    -p    INT         starting position on scaffold for analysis [5000000]
+    -o    FILE        output file [bam-file_tawiil_read_length.txt]
+
+    -h                print this message and exit
+    
+'''.format(__version__)
+
+def get_args():
+	parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter,usage=__usage__, add_help=False)
+	args = parser.add_argument_group('arguments')
+	
+	args.add_argument('-i',type=str,required=True)
+	args.add_argument('-n',type=int,required=False, default=int(1e6))
+	args.add_argument('-r',type=str,required=False,default=None)
+	args.add_argument('-p',type=int,required=False,default=int(5e6))
+	args.add_argument('-o',required=False,type=str,default=None)
+	return parser.parse_args()
+
+def init_scaffolds(scaffolds,chrom_flag):
+	prefix=''
+	if chrom_flag==True: prefix='chr'
+	regions = []
+	if scaffolds==None:
+		for x in range(1,23): regions.append('{}{}'.format(prefix,x))
+		regions.append('{}X'.format(prefix))
+		regions.append('{}Y'.format(prefix))
+	else:
+		for x in scaffolds.split(','):
+			regions.append(check_chrom(x))
+	return regions
+
+def check_chrom(scaffold,flag):
+	# formats the scaffold name according to the format in the BAM file
+	# returns a formatted scaffold name
+	if 'chr' in scaffold and flag==False: scaffold=scaffold.replace('chr','')
+	if 'chr' not in scaffold and flag==True: scaffold='chr'+scaffold
+	return scaffold
+
+class Welford(object):
+	""" 
+	    Implements Welford's algorithm for computing a running mean
+	    and standard deviation as described at: 
+		http://www.johndcook.com/standard_deviation.html
+		https://gist.github.com/alexalemi/2151722
+	"""
+
+	def __init__(self,lst=None):
+		self.k = 0
+		self.M = 0
+		self.S = 0
+		
+		self.__call__(lst)
+	
+	def update(self,x):
+		if x is None: return
+		self.k += 1
+		newM = self.M + (x - self.M)*1./self.k
+		newS = self.S + (x - self.M)*(x - newM)
+		self.M, self.S = newM, newS
+
+	def consume(self,lst):
+		lst = iter(lst)
+		for x in lst:
+			self.update(x)
+	
+	def __call__(self,x):
+		if hasattr(x,"__iter__"):
+			self.consume(x)
+		else:
+			self.update(x)
+			
+	@property
+	def mean(self):
+		return self.M
+
+	@property
+	def std(self):
+		if self.k==1:
+			return 0
+		return math.sqrt(self.S/(self.k-1))
+
+def calc_readlen(Bam,NREADS,data,scaffolds,start):
+	for ind,ele in enumerate(scaffolds):
+		for Aln in Bam.fetch(contig=ele,start=start-1):
+			if (Aln.is_duplicate==True \
+				or Aln.is_proper_pair==False \
+				or Aln.is_qcfail==True \
+				or Aln.is_unmapped==True \
+				or Aln.mapping_quality==0 \
+				or Aln.mate_is_unmapped==True):
+				continue
+			data[ind][1].update(Aln.query_length)
+			data[-1][1].update(Aln.query_length)
+			data[ind][2]+=1
+			data[-1][2]+=1
+			if data[ind][2]==NREADS: break
+		sys.stderr.write('    [{}  mean --> {}   std --> {}]\n'.format(ele,data[ind][1].mean,data[ind][1].std))
+	return data
+
+def output_data(data,ofh):
+	for x in data:
+		mean = x[1].mean
+		std = x[1].std
+		ofh.write('{}\t{}\t{}\t{}\n'.format(x[0],mean,std,x[2]))
+	ofh.close()
+##########################
+if __name__ == '__main__':
+
+	args = get_args()
+
+	Bam = pysam.AlignmentFile(args.i)
+	NREADS = args.n
+	start = args.p
+	out = args.o
+	if out==None:
+		out = args.i.replace('.bam','_tawiil_read_length.txt')
+
+	ofh = open(out,'w')
+	ofh.write('#scaffold\tread_length_mean\tread_length_std\tn_reads\n')
+
+	chrom_flag=True
+	if 'chr' not in Bam.references[0]: chrom_flag=False
+	scaffolds = init_scaffolds(args.r,chrom_flag)
+
+	data = [ [x,Welford(),0] for x in scaffolds ]
+	data.append( ['GENOME',Welford(),0] )
+
+	data = calc_readlen(Bam,NREADS,data,scaffolds,start)
+	output_data(data,ofh)
+
+	report = '  output --> {}  '.format(out)
+	sys.stdout.write('-' * len(report) +'\n'+report+'\n'+'-' * len(report)+'\n')
