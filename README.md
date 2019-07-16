@@ -35,6 +35,13 @@ Options:
 
 ```
 
+## Installation
+
+Download the `tawiil` file and make it executable
+
+`chmod +x tawiil` 
+
+
 ## Notes
 
 Reads skipped if they have one of the following characteristics
