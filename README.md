@@ -41,6 +41,14 @@ Download the `tawiil` file and make it executable
 
 `chmod +x tawiil` 
 
+### Requirements
+
+* python 3+
+* pysam
+
+* BAM file with `.bai` index
+
+------------------
 
 ## Notes
 
