@@ -56,7 +56,7 @@ def init_scaffolds(scaffolds,chrom_flag):
 		regions.append('{}Y'.format(prefix))
 	else:
 		for x in scaffolds.split(','):
-			regions.append(check_chrom(x))
+			regions.append(check_chrom(x,chrom_flag))
 	return regions
 
 def check_chrom(scaffold,flag):
